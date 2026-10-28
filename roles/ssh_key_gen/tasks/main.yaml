@@ -1,0 +1,33 @@
+---
+
+- name: Check to see if local SSH directory exists
+  tags: ssh_key_gen, ssh
+  ansible.builtin.stat:
+    path: "~/.ssh"
+  register: ssh_directory_exists_check
+
+- name: Create SSH local directory if it doesn't already exist
+  tags: ssh_key_gen, ssh
+  ansible.builtin.file:
+    path: "~/.ssh"
+    state: directory
+    mode: '700'
+  register: ssh_directory_creation
+  when: not ssh_directory_exists_check.stat.exists
+
+- name: Generate an OpenSSH keypair with the default values (4096 bits, RSA)
+  tags: ssh_key_gen, ssh
+  community.crypto.openssh_keypair:
+    path: "~/.ssh/{{ env.ansible_key_name }}"
+    passphrase: ""
+    comment: "Ansible-OpenShift-Provisioning SSH key"
+    regenerate: "{{ regenerate_private_key }}"
+  register: ssh_key_creation
+
+- name: Print results of ssh key pair creation
+  tags: ssh_key_gen, ssh
+  ansible.builtin.debug:
+    msg:
+      - "SSH key generated: {{ ssh_key_creation }};"
+      - "Regenerate private key: {{ regenerate_private_key }};"
+

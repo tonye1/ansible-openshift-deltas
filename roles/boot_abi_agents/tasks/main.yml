@@ -1,0 +1,161 @@
+---
+- name: Add Route To Bastion From KVM Host.
+  ansible.builtin.command: "ip route add {{ env.bastion.networking.ip }} via {{ env.bastion.networking.gateway }}"
+  ignore_errors: true
+
+- name: Get and print virsh list
+  block:
+    - name: Get virsh list
+      community.libvirt.virt:
+        command: list_vms
+      register: cmd_virsh_list
+    - name: Print virsh list
+      ansible.builtin.debug:
+        var: cmd_virsh_list
+
+- name: Download ISO from HTTP URL
+  ansible.builtin.get_url:
+    url: "http://{{ env.bastion.networking.ip }}:8080/agent.{{ ansible_architecture }}.iso"
+    dest: "/var/lib/libvirt/images/agent.{{ ansible_architecture }}.iso"
+    mode: '0644'
+  when: abi.boot_method | lower == "iso"
+
+- name: Create CoreOS Control Agent Nodes On The KVM host using PXE boot.
+  ansible.builtin.shell: |
+    # Delete Agent node VM, if already exists
+    virsh destroy {{ env.cluster.nodes.control.vm_name[i] }} || true
+    virsh undefine {{ env.cluster.nodes.control.vm_name[i] }} --remove-all-storage --nvram || true
+    virt-install \
+    --name {{ env.cluster.nodes.control.vm_name[i] }} \
+    --autostart \
+    --osinfo detect=on,require=off \
+    --disk pool={{ env.cluster.networking.metadata_name }}-vdisk,size={{ env.cluster.nodes.control.disk_size }},cache=none,io=native,discard=unmap \
+    --ram {{ env.cluster.nodes.control.ram }} \
+    {{ env.cluster.nodes.control.vcpu_model_option }} \
+    --vcpus {{ env.cluster.nodes.control.vcpu }} \
+    --network network={{ env.vnet_name }}{{ (',mac=' + env.cluster.nodes.control.mac[i]) }} \
+    --location "http://{{ env.bastion.networking.ip }}:8080/,kernel=agent.{{ ansible_architecture }}-kernel.img,initrd=agent.{{ ansible_architecture }}-initrd.img" \
+    --extra-args "coreos.live.rootfs_url=http://{{ env.bastion.networking.ip }}:8080/agent.{{ ansible_architecture }}-rootfs.img" \
+    {% if (env.cluster.nodes.control.mac[i] is defined and env.use_dhcp) %}
+    --extra-args "ip=dhcp" \
+    {% else %}
+    --extra-args "ip={{ env.cluster.nodes.control.ip[i] }}::{{ env.cluster.networking.gateway }}:{{ env.cluster.networking.subnetmask }}:{{ env.cluster.nodes.control.hostname[i] }}:{{ env.cluster.networking.interface }}:none" \
+    {% endif %}
+    --extra-args "rd.neednet=1 nameserver={{ env.cluster.networking.nameserver1 }}" \
+    --extra-args "random.trust_cpu=on rd.luks.options=discard ignition.firstboot ignition.platform.id=metal" \
+    {% if (install_config_vars.fips is defined and install_config_vars.fips) %}
+    --extra-args "fips=1" \
+    {% endif %}
+    {% if (install_config_vars.selinux is defined and install_config_vars.selinux==0) %}
+    --extra-args "selinux=0" \
+    {% endif %}
+    --memballoon none \
+    --graphics none \
+    --wait=-1 \
+    --extra-args "{{ _vm_console }}" \
+    --noautoconsole
+  async: 3600
+  poll: 0
+  with_sequence: start=0 end={{ (env.cluster.nodes.control.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: true
+    index_var: i
+    pause: 10
+  when: abi.boot_method | lower == "pxe"
+
+- name: Create CoreOS Control Agent Nodes On The KVM host using ISO boot.
+  ansible.builtin.shell: |
+    # Delete Agent node VM, if already exists
+    virsh destroy {{ env.cluster.nodes.control.vm_name[i] }} || true
+    virsh undefine {{ env.cluster.nodes.control.vm_name[i] }} --remove-all-storage --nvram || true
+    virt-install \
+    --name {{ env.cluster.nodes.control.vm_name[i] }} \
+    --autostart \
+    --osinfo detect=on,require=off \
+    --memory {{ env.cluster.nodes.control.ram }} \
+    --cpu host \
+    --vcpus {{ env.cluster.nodes.control.vcpu }} \
+    --cdrom "/var/lib/libvirt/images/agent.{{ ansible_architecture }}.iso" \
+    --disk size={{ env.cluster.nodes.control.disk_size }} \
+    --network network={{ env.vnet_name }}{{ (',mac=' + env.cluster.nodes.control.mac[i]) }} \
+    --graphics none \
+    --noautoconsole \
+    --wait=-1 \
+  async: 3600
+  poll: 0
+  with_sequence: start=0 end={{ (env.cluster.nodes.control.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: true
+    index_var: i
+    pause: 10
+  when: abi.boot_method | lower == "iso"
+
+- name: Create CoreOS Compute Agent Nodes On The KVM host using PXE boot.
+  ansible.builtin.shell: |
+    # Delete Agent node VM, if already exists
+    virsh destroy {{ env.cluster.nodes.compute.vm_name[i] }} || true
+    virsh undefine {{ env.cluster.nodes.compute.vm_name[i] }} --remove-all-storage --nvram || true
+    virt-install \
+    --name {{ env.cluster.nodes.compute.vm_name[i] }} \
+    --autostart \
+    --osinfo detect=on,require=off \
+    --disk pool={{ env.cluster.networking.metadata_name }}-vdisk,size={{ env.cluster.nodes.compute.disk_size }},cache=none,io=native,discard=unmap \
+    --ram {{ env.cluster.nodes.compute.ram }} \
+    {{ env.cluster.nodes.compute.vcpu_model_option }} \
+    --vcpus {{ env.cluster.nodes.compute.vcpu }} \
+    --network network={{ env.vnet_name }}{{ (',mac=' + env.cluster.nodes.compute.mac[i]) }} \
+    --location "http://{{ env.bastion.networking.ip }}:8080/,kernel=agent.{{ ansible_architecture }}-kernel.img,initrd=agent.{{ ansible_architecture }}-initrd.img" \
+    --extra-args "coreos.live.rootfs_url=http://{{ env.bastion.networking.ip }}:8080/agent.{{ ansible_architecture }}-rootfs.img" \
+    {% if (env.cluster.nodes.compute.mac[i] is defined and env.use_dhcp) %}
+    --extra-args "ip=dhcp" \
+    {% else %}
+    --extra-args "ip={{ env.cluster.nodes.compute.ip[i] }}::{{ env.cluster.networking.gateway }}:{{ env.cluster.networking.subnetmask }}:{{ env.cluster.nodes.compute.hostname[i] }}:{{ env.cluster.networking.interface }}:none" \
+    {% endif %}
+    --extra-args "rd.neednet=1 nameserver={{ env.cluster.networking.nameserver1 }}" \
+    --extra-args "random.trust_cpu=on rd.luks.options=discard ignition.firstboot ignition.platform.id=metal" \
+    {% if (install_config_vars.fips is defined and install_config_vars.fips) %}
+    --extra-args "fips=1" \
+    {% endif %}
+    {% if (install_config_vars.selinux is defined and install_config_vars.selinux==0) %}
+    --extra-args "selinux=0" \
+    {% endif %}
+    --memballoon none \
+    --graphics none \
+    --wait=-1 \
+    --extra-args "{{ _vm_console }}" \
+    --noautoconsole
+  async: 3600
+  poll: 0
+  with_sequence: start=0 end={{ (env.cluster.nodes.compute.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: true
+    index_var: i
+    pause: 10
+  when: env.cluster.nodes.compute is defined and abi.boot_method | lower == "pxe"
+
+- name: Create CoreOS Compute Agent Nodes On The KVM host using ISO boot.
+  ansible.builtin.shell: |
+    # Delete Agent node VM, if already exists
+    virsh destroy {{ env.cluster.nodes.compute.vm_name[i] }} || true
+    virsh undefine {{ env.cluster.nodes.compute.vm_name[i] }} --remove-all-storage --nvram || true
+    virt-install \
+    --name {{ env.cluster.nodes.compute.vm_name[i] }} \
+    --autostart \
+    --osinfo detect=on,require=off \
+    --memory {{ env.cluster.nodes.compute.ram }} \
+    --cpu host \
+    --vcpus {{ env.cluster.nodes.compute.vcpu }} \
+    --cdrom "/var/lib/libvirt/images/agent.{{ ansible_architecture }}.iso" \
+    --disk size={{ env.cluster.nodes.compute.disk_size }} \
+    --network network={{ env.vnet_name }}{{ (',mac=' + env.cluster.nodes.compute.mac[i]) }} \
+    --graphics none \
+    --noautoconsole \
+    --wait=-1 \
+  async: 3600
+  poll: 0
+  with_sequence: start=0 end={{ (env.cluster.nodes.compute.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: true
+    index_var: i
+    pause: 10
+  when: env.cluster.nodes.compute is defined and abi.boot_method | lower == "iso"

@@ -1,0 +1,163 @@
+---
+
+- name: Split Bastion IP addresses for use in templates
+  tags: dns
+  ansible.builtin.set_fact:
+    bastion_split_ip: "{{ env.bastion.networking.ip.split('.') }}"
+  when: env.bastion.networking.internal_ip is not defined or env.bastion.networking.internal_ip == None
+
+- name: Split Bastion Internal_IP addresses for use in templates
+  tags: dns
+  ansible.builtin.set_fact:
+    bastion_split_ip: "{{ env.bastion.networking.internal_ip.split('.') }}"
+  when: env.bastion.networking.internal_ip is defined and env.bastion.networking.internal_ip != None
+
+- name: Split Bootstrap IP addresses for use in templates
+  tags: dns
+  ansible.builtin.set_fact:
+    bootstrap_split_ip: "{{ env.cluster.nodes.bootstrap.ip.split('.') }}"
+  when: env.cluster.nodes.bootstrap is defined
+
+- name: Remove stale zone files before regenerating
+  tags: dns
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/named/{{ env.cluster.networking.metadata_name }}.db
+    - /var/named/{{ env.cluster.networking.metadata_name }}.rev
+
+- name: Template named.conf file to bastion
+  tags: dns
+  ansible.builtin.template:
+    src: dns-named.conf.j2
+    dest: /etc/named.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Template DNS forwarding file to bastion
+  tags: dns
+  ansible.builtin.template:
+    src: dns.db.j2
+    dest: /var/named/{{ env.cluster.networking.metadata_name }}.db
+    owner: named
+    group: named
+    mode: "0644"
+
+- name: Add Bootstrap node to DNS forwarding file on bastion
+  tags: dns
+  ansible.builtin.lineinfile:
+    path: /var/named/{{ env.cluster.networking.metadata_name }}.db
+    regexp: "^{{ env.cluster.nodes.bootstrap.hostname }}.*IN A"
+    line: "{{ env.cluster.nodes.bootstrap.hostname }}.{{ env.cluster.networking.metadata_name }}.{{ env.cluster.networking.base_domain | regex_replace('\\.+$', '') }}. IN A {{ env.cluster.nodes.bootstrap.ip }}"
+  when: env.cluster.nodes.bootstrap is defined
+
+- name: Add control nodes to DNS forwarding file on bastion
+  tags: dns
+  ansible.builtin.lineinfile:
+    path: /var/named/{{ env.cluster.networking.metadata_name }}.db
+    insertafter: "entries for the control nodes"
+    line: "{{ (env.cluster.nodes.control.hostname[i] | regex_replace('\\.+$','')) + '.' if '.' in env.cluster.nodes.control.hostname[i] else env.cluster.nodes.control.hostname[i] + '.' + env.cluster.networking.metadata_name + '.' + (env.cluster.networking.base_domain | regex_replace('\\.+$','')) + '.' }} IN A {{ env.cluster.nodes.control.ip[i] }}"
+  with_sequence: start=0 end={{ (env.cluster.nodes.control.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: yes
+    index_var: i
+
+- block:
+  - name: Add compute nodes to DNS forwarding file on bastion
+    tags: dns
+    ansible.builtin.lineinfile:
+      path: /var/named/{{ env.cluster.networking.metadata_name }}.db
+      insertafter: "entries for the compute nodes"
+      line: "{{ (env.cluster.nodes.compute.hostname[i] | regex_replace('\\.+$','')) + '.' if '.' in env.cluster.nodes.compute.hostname[i] else env.cluster.nodes.compute.hostname[i] + '.' + env.cluster.networking.metadata_name + '.' + (env.cluster.networking.base_domain | regex_replace('\\.+$','')) + '.' }} IN A {{ env.cluster.nodes.compute.ip[i] }}"
+    with_sequence: start=0 end={{ (env.cluster.nodes.compute.hostname | length) - 1 }} stride=1
+    loop_control:
+      extended: yes
+      index_var: i
+  when: env.cluster.nodes.compute.hostname is defined and env.cluster.nodes.compute.hostname[0] is defined and (env.cluster.nodes.compute.hostname | length) > 0
+
+- name: Add infrastructure nodes to DNS forwarding file on bastion if requested
+  tags: dns
+  ansible.builtin.lineinfile:
+    path: /var/named/{{ env.cluster.networking.metadata_name }}.db
+    insertafter: "entries for extra RHEL VMs"
+    line: "{{ env.cluster.nodes.infra.hostname[i] }}.{{ env.cluster.networking.metadata_name }}.{{ env.cluster.networking.base_domain }}. IN A {{ env.cluster.nodes.infra.ip[i] }}"
+  with_sequence: start=0 end={{ (env.cluster.nodes.infra.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: yes
+    index_var: i
+  when: env.cluster.nodes.infra.hostname is defined
+
+- name: Template DNS reverse lookup file to bastion
+  tags: dns
+  ansible.builtin.template:
+    src: dns.rev.j2
+    dest: /var/named/{{ env.cluster.networking.metadata_name }}.rev
+    owner: named
+    group: named
+    mode: "0644"
+
+- name: Add control nodes to DNS reverse lookup file on bastion
+  tags: dns
+  ansible.builtin.lineinfile:
+    path: /var/named/{{ env.cluster.networking.metadata_name }}.rev
+    insertafter: "PTR Record IP address to Hostname"
+    line: "{{ env.cluster.nodes.control.ip[i].split('.').3 }}     IN      PTR     {{ (env.cluster.nodes.control.hostname[i] | regex_replace('\\.+$','')) + '.' if '.' in env.cluster.nodes.control.hostname[i] else env.cluster.nodes.control.hostname[i] + '.' + env.cluster.networking.metadata_name + '.' + (env.cluster.networking.base_domain | regex_replace('\\.+$','')) + '.' }}"
+  with_sequence: start=0 end={{ (env.cluster.nodes.control.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: yes
+    index_var: i
+
+- name: Add compute nodes to DNS reverse lookup file on bastion
+  tags: dns
+  ansible.builtin.lineinfile:
+    path: /var/named/{{ env.cluster.networking.metadata_name }}.rev
+    insertafter: "PTR Record IP address to Hostname"
+    line: "{{ env.cluster.nodes.compute.ip[i].split('.').3 }}     IN      PTR     {{ (env.cluster.nodes.compute.hostname[i] | regex_replace('\\.+$','')) + '.' if '.' in env.cluster.nodes.compute.hostname[i] else env.cluster.nodes.compute.hostname[i] + '.' + env.cluster.networking.metadata_name + '.' + (env.cluster.networking.base_domain | regex_replace('\\.+$','')) + '.' }}"
+  with_sequence: start=0 end={{ (env.cluster.nodes.compute.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: yes
+    index_var: i
+  when: env.cluster.nodes.compute.hostname is defined and env.cluster.nodes.compute.hostname[0] is defined and env.cluster.nodes.compute.hostname[0] != None
+
+- name: Add infrastructure nodes to DNS reverse lookup file on bastion
+  tags: dns
+  ansible.builtin.lineinfile:
+    path: /var/named/{{ env.cluster.networking.metadata_name }}.rev
+    insertafter: "PTR Record IP address to Hostname"
+    line: "{{ env.cluster.nodes.infra.ip[i].split('.').3 }}     IN      PTR     {{ (env.cluster.nodes.infra.hostname[i] | regex_replace('\\.+$','')) + '.' if '.' in env.cluster.nodes.infra.hostname[i] else env.cluster.nodes.infra.hostname[i] + '.' + env.cluster.networking.metadata_name + '.' + (env.cluster.networking.base_domain | regex_replace('\\.+$','')) + '.' }}"
+  with_sequence: start=0 end={{ (env.cluster.nodes.infra.hostname | length) - 1 }} stride=1
+  loop_control:
+    extended: yes
+    index_var: i
+  when: env.cluster.nodes.infra.hostname is defined
+
+- name: Enable and start named after config is in place
+  tags: dns
+  ansible.builtin.systemd:
+    name: named
+    enabled: yes
+    state: started
+
+- name: Restart named to update changes made to DNS
+  tags: dns, resolv
+  ansible.builtin.systemd:
+    name: named
+    state: restarted
+
+- name: Template out bastion's resolv.conf file, replacing initial resolv.conf
+  tags: dns, resolv
+  ansible.builtin.template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: "644"
+
+- name: Restart network to update changes made to /etc/resolv.conf
+  tags: dns, resolv
+  ansible.builtin.service:
+    name: NetworkManager
+    state: restarted
+  when: installation_type | lower != 'zvm'

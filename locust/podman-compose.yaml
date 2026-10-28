@@ -1,0 +1,24 @@
+# locust-master — run on the bastion host (<bastion-host>)
+# Uses Podman. Replace podman with docker if preferred.
+#
+# Usage:
+#   podman-compose up -d
+#   # then open http://<bastion-host>:8089 in your browser
+
+version: "3"
+
+services:
+  locust-master:
+    image: locustio/locust:latest
+    command: >
+      -f /locust/locustfile.py
+      --master
+      --master-bind-host=0.0.0.0
+      --master-bind-port=5557
+      --web-port=8089
+      --host=http://REPLACE_WITH_TARGET_APP_URL
+    ports:
+      - "8089:8089"   # web UI
+      - "5557:5557"   # worker communication
+    volumes:
+      - ./locustfile.py:/locust/locustfile.py:ro

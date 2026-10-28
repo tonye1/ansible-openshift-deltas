@@ -1,0 +1,26 @@
+---
+- name: Validate Host Connectivity and Collect Diagnostics
+  hosts: all
+  gather_facts: false  # Disabled initially to catch connection errors via manual tasks
+  
+  tasks:
+    - name: Verify SSH connection and Python environment
+      ansible.builtin.ping:
+      register: ping_result
+
+    - name: Display connection success message
+      ansible.builtin.debug:
+        msg: "Successfully connected to {{ inventory_hostname }}. Response: {{ ping_result.ping }}"
+
+    - name: Gather system specifications (Facts)
+      ansible.builtin.setup:
+      register: server_facts
+
+    - name: Output baseline system information
+      ansible.builtin.debug:
+        msg: 
+          - "OS Family: {{ ansible_facts['os_family'] }}"
+          - "Distribution: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+          - "Total Memory: {{ ansible_facts['memtotal_mb'] }} MB"
+          - "vCPUs: {{ ansible_facts['processor_vcpus'] }}"
+

@@ -1,0 +1,163 @@
+# ---------------------------------------------------------------------------
+# MinIO — deployed inside OpenShift as a single-node object store.
+# This gives KServe / RHOAI the S3-compatible backend it needs to serve
+# the ccf_gru_static ONNX model, with no external AWS/MinIO client required.
+#
+# Network:
+#   KVM host  : <REPLACE>
+#   Bastion   : <bastion-host>   (<BASTION_HOSTNAME>)
+#   Cluster   : <CLUSTER_DOMAIN>
+#
+# Image note:
+#   quay.io/minio/minio does NOT publish an s390x image.
+#   docker.io/minio/minio DOES publish linux/s390x builds.
+#   <KVM_HOST> compute nodes are s390x — docker.io is required.
+#
+# Apply order:
+#   oc apply -f minio-deploy.yaml
+#
+# After apply:
+#   MinIO Console : https://minio-console-minio.apps.<CLUSTER_DOMAIN>
+#   MinIO API     : https://minio-api-minio.apps.<CLUSTER_DOMAIN>
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minio
+---
+# PVC — 20 Gi is sufficient for ONNX models (the GRU model is ~10 MB)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-pvc
+  namespace: minio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+# Secret — credentials (change before applying to a shared environment)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-credentials
+  namespace: minio
+type: Opaque
+stringData:
+  MINIO_ROOT_USER: <MINIO_USER>
+  MINIO_ROOT_PASSWORD: <MINIO_PASSWORD>
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: minio
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        # quay.io/minio/minio has no s390x image — use Docker Hub which does
+        image: docker.io/minio/minio:RELEASE.2024-01-16T16-07-38Z
+        args:
+          - server
+          - /data
+          - --console-address
+          - ":9001"
+        ports:
+          - containerPort: 9000   # S3 API
+            name: api
+          - containerPort: 9001   # Web console
+            name: console
+        envFrom:
+          - secretRef:
+              name: minio-credentials
+        volumeMounts:
+          - name: data
+            mountPath: /data
+        resources:
+          requests:
+            cpu: "250m"
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /minio/health/live
+            port: 9000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: minio-pvc
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: minio
+spec:
+  selector:
+    app: minio
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001
+---
+# Route — S3 API (used by KServe and the upload job)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: minio-api
+  namespace: minio
+spec:
+  host: minio-api-minio.apps.<CLUSTER_DOMAIN>
+  to:
+    kind: Service
+    name: minio
+  port:
+    targetPort: api
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Route — Web console (for manual browsing)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: minio-console
+  namespace: minio
+spec:
+  host: minio-console-minio.apps.<CLUSTER_DOMAIN>
+  to:
+    kind: Service
+    name: minio
+  port:
+    targetPort: console
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

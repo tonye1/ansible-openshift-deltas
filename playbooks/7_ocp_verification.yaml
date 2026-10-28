@@ -1,0 +1,23 @@
+---
+
+- import_playbook: populate_inventory.yaml
+
+# Complete OpenShift verification
+- name: 7 OCP verification
+  hosts: bastion
+  become: true
+  environment:
+    KUBECONFIG: "{{ '/home/' if (env.bastion.access.user != 'root') else '/'}}{{ env.bastion.access.user }}/.kube/config"
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/group_vars/all.yaml"
+    - "{{ playbook_dir }}/group_vars/secrets.yaml"
+  roles:
+    - approve_certs
+    - check_nodes
+    - role: approve_certs
+      approve_certs_cleanup: true
+    - wait_for_cluster_operators
+    - wait_for_install_complete
+    - label_infra_nodes
+

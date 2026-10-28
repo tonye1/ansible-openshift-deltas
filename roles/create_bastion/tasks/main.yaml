@@ -1,0 +1,157 @@
+---
+- name: Create a directory on the KVM host server for bastion configuration files
+  become: false
+  tags: create_bastion
+  ansible.builtin.file:
+    path: "{{ env.file_server.cfgs_dir }}/{{ env.bastion.networking.hostname }}"
+    mode: "0755"
+    state: directory
+
+- name: Copy RHEL8 template kickstart file to KVM host server
+  tags: create_bastion
+  when: '"rhel8" in env.file_server.iso_os_variant'
+  become: false
+  ansible.builtin.template:
+    src: "bastion-ks.cfg.j2"
+    dest: "{{ env.file_server.cfgs_dir }}/{{ env.bastion.networking.hostname }}/bastion-ks.cfg"
+    mode: "0644"
+    force: true
+
+- name: Copy RHEL9 template (default) kickstart file to KVM host server
+  tags: create_bastion
+  when: '"rhel8" not in env.file_server.iso_os_variant'
+  become: false
+  ansible.builtin.template:
+    src: "rhel9-bastion-ks.cfg.j2"
+    dest: "{{ env.file_server.cfgs_dir }}/{{ env.bastion.networking.hostname }}/bastion-ks.cfg"
+    mode: "0644"
+    force: true
+
+- name: Create hash from bastion's root password to input in kickstart file
+  tags: create_bastion
+  ansible.builtin.shell: |
+    set -o pipefail
+    echo "{{ env.bastion.access.root_pass }}" | openssl passwd -6 -in -
+  register: root_pass_hash
+
+- name: Add hashed root password to bastion's RHEL kickstart config file
+  tags: create_bastion
+  become: false
+  ansible.builtin.lineinfile:
+    path: "{{ env.file_server.cfgs_dir }}/{{ env.bastion.networking.hostname }}/bastion-ks.cfg"
+    insertafter: "Root password"
+    line: "rootpw --iscrypted {{ root_pass_hash.stdout }}"
+
+- name: Create hash from bastion user password to input in kickstart file
+  tags: create_bastion
+  ansible.builtin.shell: |
+    set -o pipefail
+    echo "{{ env.bastion.access.pass }}" | openssl passwd -6 -in -
+  register: user_pass_hash
+
+- name: Add hashed user password to bastion's RHEL kickstart config file
+  tags: create_bastion
+  become: false
+  ansible.builtin.lineinfile:
+    path: "{{ env.file_server.cfgs_dir }}/{{ env.bastion.networking.hostname }}/bastion-ks.cfg"
+    insertafter: "Users and Groups Definitions"
+    line: "user --groups=wheel --name={{ env.bastion.access.user }} --password={{ user_pass_hash.stdout }} --iscrypted"
+
+- name: Get KVM host home for use in next step
+  tags: create_bastion, virt-install
+  become: false
+  ansible.builtin.command: pwd
+  register: kvm_host_home
+
+
+- name: Bind-mount RHEL ISO tree under httpd docroot so bastion Anaconda can reach packages
+  tags: create_bastion, virt-install
+  when: env.file_server.protocol == 'sftp'
+  ansible.builtin.shell: |
+    mkdir -p /var/www/html/rhel-iso
+    mountpoint -q /var/www/html/rhel-iso || \
+      mount --bind {{ env.file_server.iso_mount_local_path }} /var/www/html/rhel-iso
+  args:
+    executable: /bin/bash
+
+- name: Ensure httpd is running to serve RHEL ISO tree to bastion Anaconda
+  tags: create_bastion, virt-install
+  when: env.file_server.protocol == 'sftp'
+  ansible.builtin.systemd:
+    name: httpd
+    state: started
+
+- name: Copy kickstart file to httpd docroot so Anaconda can fetch it over HTTP
+  tags: create_bastion, virt-install
+  when: env.file_server.protocol == 'sftp'
+  ansible.builtin.copy:
+    src: "{{ env.file_server.cfgs_dir }}/{{ env.bastion.networking.hostname }}/bastion-ks.cfg"
+    dest: /var/www/html/bastion-ks.cfg
+    mode: "0644"
+    remote_src: true
+
+
+- name: Boot and kickstart bastion. To monitor, login to your KVM host and run 'virsh console <bastion VM name>'
+  tags: create_bastion, virt-install
+  ansible.builtin.shell: |
+    virsh destroy {{ env.bastion.vm_name }} || true
+    virsh undefine {{ env.bastion.vm_name }} --remove-all-storage --nvram || true
+    virt-install \
+    --name {{ env.bastion.vm_name }} \
+    --osinfo detect=on,name={{ ('rhel8.6') if rhcos_os_variant is not defined else (rhcos_os_variant) }} \
+    --autostart \
+    --memory={{ env.bastion.resources.ram }} \
+    --vcpus={{ env.bastion.resources.vcpu }} \
+    --location '{{ env.file_server.iso_mount_local_path if env.file_server.protocol == "sftp" else (env.file_server.protocol + "://" + (env.file_server.user + ":" + env.file_server.pass + "@" if env.file_server.protocol == "ftp" else "") + env.file_server.ip + (":" + env.file_server.port if env.file_server.port | default("") | length > 0 else "") + "/" + (env.file_server.iso_mount_dir | regex_replace("^/", ""))) }}' \
+    {% if env.file_server.protocol == 'sftp' %}
+    --disk path={{ env.file_server.iso_file_local_path }},device=cdrom,readonly=on \
+    {% endif %}
+    --check disk_size=off \
+    --disk pool={{ env.cluster.networking.metadata_name }}-vdisk,size={{ env.bastion.resources.disk_size }},cache=none,io=native,discard=unmap \
+    --network network={{ env.vnet_name }}{{ (',mac=' + env.bastion.networking.mac) if (env.bastion.networking.mac is defined and env.use_dhcp) }} \
+    --memballoon none \
+    --graphics none \
+    --console pty,target_type=serial \
+    --noautoconsole --wait=-1 \
+    --boot hd \
+    {% if env.file_server.protocol != 'sftp' %}
+    --initrd-inject "{{ env.file_server.cfgs_dir }}/{{ env.bastion.networking.hostname }}/bastion-ks.cfg" \
+    --extra-args "inst.ks=file:/bastion-ks.cfg" \
+    {% else %}
+    --extra-args "inst.ks=http://{{ env.virt_install_repo_ip }}/bastion-ks.cfg" \
+    --extra-args "inst.stage2=hd:LABEL={{ env.file_server.iso_label }}" \
+    {% endif %}
+    {% if (env.bastion.networking.mac is defined and env.use_dhcp) %}
+    --extra-args "ip=dhcp" \
+    {% else %}
+    --extra-args "ip={{ env.bastion.networking.ip }}::{{ env.bastion.networking.gateway }}:{{ env.bastion.networking.subnetmask }}:{{ env.bastion.networking.hostname }}::none" \
+    {% endif %}
+    {% if (install_config_vars.fips is defined and install_config_vars.fips) %}
+    --extra-args "fips=1" \
+    {% endif %}
+    {% if (install_config_vars.selinux is defined and install_config_vars.selinux==0) %}
+    --extra-args "selinux=0" \
+    {% endif %}
+    --extra-args "{{ _vm_console }}"
+  timeout: 620
+  register: cmd_output
+  ignore_errors: true
+
+- name: Debug, print above command output
+  tags: create_bastion, virt-install
+  ansible.builtin.debug:
+    msg:
+      - "rc: {{ cmd_output.rc }}"
+      - "stdout: {{ cmd_output.stdout }}"
+      - "stderr: {{ cmd_output.stderr }}"
+
+- name: Fail if virt-install failed
+  tags: create_bastion, virt-install
+  ansible.builtin.fail:
+    msg: "virt-install failed. See debug output above for the full error."
+  when: cmd_output.rc != 0
+
+- name: Waiting 1 minute for automated bastion installation and configuration to complete
+  tags: create_bastion, virt-install
+  ansible.builtin.pause:
+    minutes: 1

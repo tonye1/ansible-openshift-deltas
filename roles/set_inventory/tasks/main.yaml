@@ -1,0 +1,73 @@
+---
+- name: Display the raw variable value
+  ansible.builtin.debug:
+    msg: "the current config file is {{ ansible_config_file }}"
+
+- name: TONY Find inventory directory from ansible.cfg
+  tags: set_inventory
+  ansible.builtin.shell: cat {{ ansible_config_file }} | grep 'inventory=' | cut -f2 -d"="
+  register: find_inventory
+
+- name: Run ansible-config view to extract file contents
+  ansible.builtin.command: ansible-config view
+  delegate_to: localhost
+  register: config_contents
+  changed_when: false
+
+- name: Display the ansible.cfg contents
+  ansible.builtin.debug:
+    msg: "{{ config_contents.stdout_lines }}"
+
+- name: TONY dump absolute path to project.
+  tags: set_inventory
+  ansible.builtin.shell: |
+    ansible_config="{{ ansible_config_file }}"
+    echo "${ansible_config%/*}/"
+  register: find_project
+
+- name: TONY Display the raw variable value after setting
+  ansible.builtin.debug:
+    msg: "current network_mode is {{ env.z }}"
+
+- name: TONY Display the raw variable value after setting
+  ansible.builtin.debug:
+    msg: "current network_mode is {{ env.network_mode }}"
+
+- name: Fail if network_mode is NAT and jumphost vars are undefined.
+  tags: set_inventory
+  ansible.builtin.fail:
+    msg: "Error jumphost vars undefined: when env.network_mode is NAT, you must set all env.jumphost variables."
+  when:
+    - (env.network_mode | upper == 'NAT')
+    - (env.jumphost.name is none or env.jumphost.ip is none or env.jumphost.user is none or env.jumphost.pass is none or env.jumphost.path_to_keypair is none)
+
+- name: Template out inventory with localhost, file server, KVM host, jumphost(optional) and bastion information
+  tags: set_inventory
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: "{{ find_project.stdout }}{{ find_inventory.stdout }}/hosts"
+    force: true
+
+- ansible.builtin.meta: refresh_inventory
+
+- name: Add path to Ansible private key in ansible.cfg
+  tags: set_inventory
+  ansible.builtin.lineinfile:
+    line: "private_key_file=~/.ssh/{{ env.ansible_key_name }}"
+    path: "{{ ansible_config_file }}"
+    regexp: "private_key_file"
+    state: present
+
+- name: check inventory setup
+  tags: set_inventory
+  ansible.builtin.command: ansible-inventory --list
+  register: inv_check
+  failed_when: inv_check.rc != 0
+
+- name: Gather facts to re-read inventory after changes made to inventory
+  tags: set_inventory
+  ansible.builtin.gather_facts:
+
+- name: Refresh inventory
+  tags: set_inventory
+  ansible.builtin.meta: refresh_inventory

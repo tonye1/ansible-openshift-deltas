@@ -1,0 +1,30 @@
+# Build essentials (required for compiling Python packages)
+git-core [platform:rpm]
+python3-devel [platform:rpm]
+python3-pip [platform:rpm]
+python3-wheel [platform:rpm]
+python3-setuptools [platform:rpm]
+python3-dnf [platform:rpm]
+gcc [platform:rpm]
+gcc-c++ [platform:rpm]
+make [platform:rpm]
+
+# Controller packages (pkgs_controller)
+openssh [platform:rpm]
+openssh-clients [platform:rpm]
+expect [platform:rpm]
+rsync [platform:rpm]
+sshpass [platform:rpm]
+
+# Utilities
+unzip [platform:rpm]
+tar [platform:rpm]
+which [platform:rpm]
+jq [platform:rpm]
+wget [platform:rpm]
+
+# SSL/TLS and cryptography dependencies
+openssl [platform:rpm]
+openssl-devel [platform:rpm]
+libffi-devel [platform:rpm]
+ca-certificates [platform:rpm]

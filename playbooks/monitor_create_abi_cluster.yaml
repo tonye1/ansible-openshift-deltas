@@ -1,0 +1,13 @@
+---
+
+- import_playbook: populate_inventory.yaml
+
+# Monitoring ABI Installation.
+- name: Monitoring ABI Installation
+  hosts: bastion
+  become: false
+  vars_files:
+    - "{{ playbook_dir }}/group_vars/all.yaml"
+    - "{{ playbook_dir }}/group_vars/secrets.yaml"
+  roles:
+    - abi_install_complete

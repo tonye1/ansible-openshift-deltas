@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-master
+  namespace: locust
+  labels:
+    app: locust-master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: locust-master
+  template:
+    metadata:
+      labels:
+        app: locust-master
+    spec:
+      containers:
+      - name: locust
+        image: image-registry.openshift-image-registry.svc:5000/locust/locust:latest
+        command: ["locust"]
+        args:
+        - "-f"
+        - "/locust/locustfile.py"
+        - "--master"
+        - "--master-bind-host=0.0.0.0"
+        - "--master-bind-port=5557"
+        - "--web-port=8089"
+        - "--host=http://REPLACE_WITH_TARGET_APP_URL"
+        ports:
+        - containerPort: 8089
+          name: web
+        - containerPort: 5557
+          name: worker
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        volumeMounts:
+        - name: scripts
+          mountPath: /locust
+      volumes:
+      - name: scripts
+        configMap:
+          name: locust-scripts

@@ -1,0 +1,2 @@
+search {{ env.cluster.networking.metadata_name }}.{{ env.cluster.networking.base_domain | regex_replace('\\.+$', '') }}
+nameserver 127.0.0.1

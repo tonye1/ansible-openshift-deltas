@@ -1,0 +1,6 @@
+# Runtime dependencies for the onnx-server Flask inference server.
+# onnxruntime is NOT listed here — it is built from source in Stage 1 of
+# the Dockerfile and installed from the resulting .whl in Stage 2.
+flask==3.0.3
+numpy==1.26.4
+gunicorn==22.0.0

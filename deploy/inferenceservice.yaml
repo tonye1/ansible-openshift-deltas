@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# inferenceservice.yaml  (updated for custom onnx-server runtime on s390x)
+#
+# Cluster domain : <CLUSTER_DOMAIN>
+# MinIO API      : http://minio.minio.svc.cluster.local:9000  (in-cluster)
+# MinIO creds    : <MINIO_USER> / <MINIO_PASSWORD>  (from minio-deploy.yaml)
+# Runtime        : onnx-server  (custom s390x build — no Triton/OVMS needed)
+#
+# Model input  : name="input"  shape=(7, 16, 220)  float32
+# Model output : shape=(7, 16, 1) — last time-step is fraud probability
+#
+# NOTE: RawDeployment mode does NOT auto-create an OpenShift Route.
+#       KServe only creates a Service + Ingress.  The Route below exposes
+#       the predictor externally so Locust (and curl) can reach it.
+#
+# Apply order:
+#   1. oc apply -f onnx-server/serving-runtime.yaml
+#   2. oc apply -f inferenceservice.yaml
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fraud-detection
+---
+# S3 credentials secret for KServe → MinIO
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ccf-gru-s3-secret
+  namespace: fraud-detection
+  annotations:
+    serving.kserve.io/s3-endpoint: minio.minio.svc.cluster.local:9000
+    serving.kserve.io/s3-usehttps: "0"
+    serving.kserve.io/s3-verifyssl: "0"
+    serving.kserve.io/s3-region: us-east-1
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: <MINIO_USER>
+  AWS_SECRET_ACCESS_KEY: <MINIO_PASSWORD>
+---
+# ServiceAccount that binds the secret to the InferenceService
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ccf-gru-sa
+  namespace: fraud-detection
+secrets:
+  - name: ccf-gru-s3-secret
+---
+# InferenceService — uses the custom onnx-server ServingRuntime (s390x)
+# KServe will mount s3://models/ccf_gru_static at /mnt/models inside the pod.
+# server.py scans /mnt/models recursively for the first .onnx file and loads it.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: ccf-gru-static
+  namespace: fraud-detection
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    serviceAccountName: ccf-gru-sa
+    model:
+      modelFormat:
+        name: onnx
+      runtime: onnx-server
+      storageUri: s3://models/ccf_gru_static
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+---
+# Route — exposes the predictor Service externally.
+# RawDeployment mode only creates a ClusterIP Service; this Route is required
+# so that Locust and curl on the bastion can reach the inference endpoint.
+#
+# The Service created by KServe is named:  ccf-gru-static-predictor
+# Port 80 on the Service proxies to container port 8080.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ccf-gru-static-predictor
+  namespace: fraud-detection
+  annotations:
+    haproxy.router.openshift.io/timeout: 120s
+spec:
+  host: ccf-gru-static-predictor-fraud-detection.apps.<CLUSTER_DOMAIN>
+  to:
+    kind: Service
+    name: ccf-gru-static-predictor
+    weight: 100
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

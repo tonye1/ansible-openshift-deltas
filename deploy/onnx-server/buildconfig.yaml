@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# buildconfig.yaml
+#
+# Builds the onnx-server image inside OpenShift using a Docker strategy.
+# No podman/docker/buildah required on the bastion.
+#
+# The build runs as a Pod on the s390x compute nodes — the resulting image
+# is pushed directly into the internal registry at:
+#   image-registry.openshift-image-registry.svc:5000/fraud-detection/onnx-server:latest
+#
+# Usage:
+#   oc apply -f buildconfig.yaml          # create the BuildConfig + ImageStream
+#   oc start-build onnx-server --follow   # run the build and stream logs
+# ---------------------------------------------------------------------------
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: onnx-server
+  namespace: fraud-detection
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: onnx-server
+  namespace: fraud-detection
+spec:
+  source:
+    type: Binary          # we push the local directory from the bastion with oc start-build --from-dir
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      noCache: false
+  output:
+    to:
+      kind: ImageStreamTag
+      name: onnx-server:latest
+  resources:
+    limits:
+      cpu: "16"          # onnxruntime source build is CPU-intensive — use 16 cores
+      memory: 24Gi       # cmake + ninja link step peaks at ~16 GB
+  completionDeadlineSeconds: 7200   # 2 hour timeout for the build

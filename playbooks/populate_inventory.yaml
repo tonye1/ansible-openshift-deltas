@@ -1,0 +1,66 @@
+---
+# Populates kvm_host, bastion, file_server, and jumphost groups from all.yaml
+# variables so playbooks work when AAP injects a minimal inventory (localhost only).
+# Import this at the top of every playbook:  - import_playbook: populate_inventory.yaml
+
+- name: Populate inventory groups from all.yaml variables
+  hosts: localhost
+  gather_facts: false
+  tasks:
+
+    - name: Add KVM host 1 to kvm_host group
+      ansible.builtin.add_host:
+        name: "{{ env.z.lpar1.hostname }}"
+        groups: kvm_host
+        ansible_host: "{{ env.z.lpar1.ip }}"
+        ansible_user: "{{ env.z.lpar1.user }}"
+        ansible_become_password: "{{ env.z.lpar1.pass }}"
+      when: env.z.lpar1.hostname is defined
+
+    - name: Add KVM host 2 to kvm_host group
+      ansible.builtin.add_host:
+        name: "{{ env.z.lpar2.hostname }}"
+        groups: kvm_host
+        ansible_host: "{{ env.z.lpar2.ip }}"
+        ansible_user: "{{ env.z.lpar2.user }}"
+        ansible_become_password: "{{ env.z.lpar2.pass }}"
+      when: env.z.lpar2.hostname is defined
+
+    - name: Add KVM host 3 to kvm_host group
+      ansible.builtin.add_host:
+        name: "{{ env.z.lpar3.hostname }}"
+        groups: kvm_host
+        ansible_host: "{{ env.z.lpar3.ip }}"
+        ansible_user: "{{ env.z.lpar3.user }}"
+        ansible_become_password: "{{ env.z.lpar3.pass }}"
+      when: env.z.lpar3.hostname is defined
+
+    - name: Add bastion to bastion group
+      ansible.builtin.add_host:
+        name: "{{ env.bastion.networking.hostname }}"
+        groups: bastion
+        ansible_host: "{{ env.bastion.networking.ip }}"
+        ansible_user: "{{ env.bastion.access.user }}"
+        ansible_become_password: "{{ env.bastion.access.pass }}"
+      when: env.bastion.networking.hostname is defined
+
+    - name: Add file server to file_server group
+      ansible.builtin.add_host:
+        name: "{{ env.file_server.ip }}"
+        groups: file_server
+        ansible_host: "{{ env.file_server.ip }}"
+        ansible_user: "{{ env.file_server.user }}"
+        ansible_become_password: "{{ env.file_server.pass }}"
+      when: env.file_server.ip is defined
+
+    - name: Add jumphost to jumphost group
+      ansible.builtin.add_host:
+        name: "{{ env.jumphost.name }}"
+        groups: jumphost
+        ansible_host: "{{ env.jumphost.ip }}"
+        ansible_user: "{{ env.jumphost.user }}"
+        ansible_become_password: "{{ env.jumphost.pass }}"
+      when:
+        - env.jumphost.name is defined
+        - env.jumphost.name is not none
+        - env.network_mode | upper == 'NAT'

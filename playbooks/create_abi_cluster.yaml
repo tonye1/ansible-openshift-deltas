@@ -1,0 +1,53 @@
+---
+
+- import_playbook: populate_inventory.yaml
+
+# ABI Installation Proccess.
+- name: ABI Installation Proccess
+  hosts: bastion
+  become: false
+  vars_files:
+    - "{{ playbook_dir }}/group_vars/all.yaml"
+    - "{{ playbook_dir }}/group_vars/secrets.yaml"
+    - "{{ playbook_dir }}/group_vars/zvm.yaml"
+    - "{{ playbook_dir }}/group_vars/disconnected.yaml"
+  roles:
+    - common # Common Variable the will be used by all the inwalked roles.
+    - { role: offline_artifacts, when: disconnected.enabled } # Update CA Certificates & Download OCP Packages
+    - { role: download_ocp_installer, when: not disconnected.enabled } # Download Openshift Installer.
+    - prepare_configs # Prepare AgentConfig & InstallConfig.
+    - create_agent # Create Agents || Build initrd.img, rootfs.img & kernelfs.img.
+
+- name: Start z/VM Nodes
+  hosts: bastion
+  become: false
+  vars_files:
+    - "{{ playbook_dir }}/group_vars/zvm.yaml"
+  tasks:
+    - name: Support for z/VM
+      when: installation_type | lower == 'zvm'
+      block:
+        - name: Setup Param File
+          ansible.builtin.include_role:
+            name: setup_params
+
+        - name: Boot z/VM Guests
+          ansible.builtin.include_tasks: ../roles/boot_zvm_nodes/tasks/main.yaml
+          loop: "{{ range(zvm.nodes | length) | list }}"
+
+# Boot ABI KVM Agents.
+- name: Boot ABI Agents
+  hosts: kvm_host[0]
+  become: false
+  vars_files:
+    - "{{ playbook_dir }}/group_vars/all.yaml"
+    - "{{ playbook_dir }}/group_vars/secrets.yaml"
+  roles:
+    - common
+    - { role: boot_abi_agents, when: installation_type | lower == 'kvm' }
+
+- name: Setup SSH agent
+  tags: ssh_to_nodes
+  hosts: bastion
+  roles:
+    - ssh_agent

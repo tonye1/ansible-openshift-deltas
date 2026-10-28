@@ -1,0 +1,27 @@
+{% set base = env.cluster.networking.base_domain | regex_replace('\\.+$', '') %}
+{% set meta = env.cluster.networking.metadata_name %}
+$TTL 86400
+@ IN SOA {{ env.bastion.networking.hostname }}.{{ meta }}.{{ base }}. admin.{{ meta }}.{{ base }}. (
+                                            2020011800 ;Serial
+                                            3600 ;Refresh
+                                            1800 ;Retry
+                                            604800 ;Expire
+                                            86400 ;Minimum TTL
+)
+;Name Server Information
+@ IN NS {{ env.bastion.networking.hostname }}.{{ meta }}.{{ base }}.
+{{ env.bastion.networking.hostname }}     IN      A       {{ env.bastion.networking.ip }}
+
+;Reverse lookup for Name Server
+{{ bastion_split_ip.3 }} IN PTR {{ env.bastion.networking.hostname }}.{{ meta }}.{{ base }}.
+
+;PTR Record IP address to Hostname
+{% if env.cluster.nodes.bootstrap is defined %}
+{% if '.' in env.cluster.nodes.bootstrap.hostname %}
+{{ bootstrap_split_ip.3 }}     IN      PTR     {{ env.cluster.nodes.bootstrap.hostname | regex_replace('\\.+$', '') }}.
+{% else %}
+{{ bootstrap_split_ip.3 }}     IN      PTR     {{ env.cluster.nodes.bootstrap.hostname }}.{{ meta }}.{{ base }}.
+{% endif %}
+{%endif %}
+{{ bastion_split_ip.3 }}     IN      PTR     api-int.{{ meta }}.{{ base }}.
+{{ bastion_split_ip.3 }}     IN      PTR     api.{{ meta }}.{{ base }}.

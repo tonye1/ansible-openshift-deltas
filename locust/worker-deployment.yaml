@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-worker
+  namespace: locust
+  labels:
+    app: locust-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: locust-worker
+  template:
+    metadata:
+      labels:
+        app: locust-worker
+    spec:
+      containers:
+      - name: locust
+        # ubi9/python-311 is already cached in the internal registry from onnx-server builds
+        image: registry.access.redhat.com/ubi9/python-311:latest
+        command: ["sh", "-c"]
+        args:
+          - "pip install --quiet --no-cache-dir locust==2.32.3 numpy==1.26.4 && locust
+              -f /locust/locustfile.py
+              --worker
+              --master-host=$(MASTER_HOST)
+              --master-port=5557"
+        env:
+        - name: MASTER_HOST
+          value: "<bastion-host>"               # bastion IP — Locust master
+        - name: LOCUST_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: locust-token-secret      # created by prepare-locust-token.sh
+              key: token
+              optional: true
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        volumeMounts:
+        - name: scripts
+          mountPath: /locust
+      volumes:
+      - name: scripts
+        configMap:
+          name: locust-scripts

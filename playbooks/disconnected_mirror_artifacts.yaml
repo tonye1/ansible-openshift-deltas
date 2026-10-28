@@ -1,0 +1,16 @@
+---
+- name: Mirror ocp artifacts
+  hosts: mirrorhost
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/group_vars/all.yaml"
+    - "{{ playbook_dir }}/group_vars/secrets.yaml"
+    - "{{ playbook_dir }}/group_vars/disconnected.yaml"
+  tasks:
+    - name: mirror ocp artifacts when disconnected install
+      ansible.builtin.include_role:
+        name: '{{ item }}'
+      loop:
+        - disconnected_check_vars
+        - disconnected_mirror_images
+      when: disconnected.enabled

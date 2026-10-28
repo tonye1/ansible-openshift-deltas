@@ -1,0 +1,114 @@
+# ---------------------------------------------------------------------------
+# triton-inferenceservice.yaml
+#
+# KServe InferenceService for ccf_gru_static ONNX model
+# served by IBM Z Accelerated NVIDIA Triton Inference Server.
+#
+# Cluster:  <CLUSTER_DOMAIN>
+# Namespace: fraud-detection
+# MinIO:     http://minio.minio.svc.cluster.local:9000  (in-cluster)
+# Bucket:    models
+# Model path: triton-ccf-gru-static/   (Triton repo root inside the bucket)
+#
+# Model layout in MinIO:
+#   s3://models/triton-ccf-gru-static/ccf_gru_static/config.pbtxt
+#   s3://models/triton-ccf-gru-static/ccf_gru_static/1/model.onnx
+#
+# Apply order:
+#   1. oc apply -f deploy/triton/triton-serving-runtime.yaml
+#   2. oc apply -f deploy/triton/triton-inferenceservice.yaml
+# ---------------------------------------------------------------------------
+
+# S3 credentials secret — reuses the existing MinIO deployment
+apiVersion: v1
+kind: Secret
+metadata:
+  name: triton-s3-secret
+  namespace: fraud-detection
+  annotations:
+    serving.kserve.io/s3-endpoint: minio.minio.svc.cluster.local:9000
+    serving.kserve.io/s3-usehttps: "0"
+    serving.kserve.io/s3-verifyssl: "0"
+    serving.kserve.io/s3-region: us-east-1
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: <MINIO_USER>
+  AWS_SECRET_ACCESS_KEY: <MINIO_PASSWORD>
+---
+# ServiceAccount that binds the S3 secret to the InferenceService
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: triton-sa
+  namespace: fraud-detection
+secrets:
+  - name: triton-s3-secret
+---
+# InferenceService — IBM Z Triton ServingRuntime, ONNX model, RawDeployment
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: ccf-gru-static-triton
+  namespace: fraud-detection
+  annotations:
+    # RawDeployment: no Knative / ServiceMesh required — matches <KVM_HOST> setup
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    serviceAccountName: triton-sa
+    model:
+      modelFormat:
+        name: onnx
+      # Must match the ServingRuntime name in triton-serving-runtime.yaml
+      runtime: triton-inference-server
+      # KServe mounts everything under this S3 prefix at /mnt/models.
+      # Triton's --model-repository=/mnt/models will find ccf_gru_static/ there.
+      storageUri: s3://models/triton-ccf-gru-static
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 8Gi
+---
+# Route — exposes the predictor externally for Locust and curl on the bastion.
+#
+# IMPORTANT — two requirements for this Route to survive on this cluster:
+#   1. Name must be "ccf-gru-static-triton-predictor" (matches KServe naming convention)
+#   2. ownerReferences must point to the InferenceService UID — without this the
+#      RHOAI ODH operator garbage-collects the Route within seconds of creation.
+#
+# To get the UID after applying the InferenceService:
+#   oc get inferenceservice ccf-gru-static-triton -n fraud-detection \
+#     -o jsonpath="{.metadata.uid}"
+# Then substitute it below before applying this Route.
+#
+# targetPort must be 8080 (the pod port) — the KServe Service is headless (clusterIP: None)
+# so HAProxy resolves it to pod IPs and connects directly on the pod port.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ccf-gru-static-triton-predictor
+  namespace: fraud-detection
+  annotations:
+    haproxy.router.openshift.io/timeout: 120s
+  ownerReferences:
+  - apiVersion: serving.kserve.io/v1beta1
+    blockOwnerDeletion: true
+    controller: true
+    kind: InferenceService
+    name: ccf-gru-static-triton
+    uid: 43a4fa83-54bd-46ae-a697-41a662c612ca
+spec:
+  host: ccf-gru-static-triton-fraud-detection.apps.<CLUSTER_DOMAIN>
+  to:
+    kind: Service
+    name: ccf-gru-static-triton-predictor
+    weight: 100
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

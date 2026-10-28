@@ -1,0 +1,25 @@
+---
+- import_playbook: populate_inventory.yaml
+
+- name: "Setup host ... "
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: true
+  vars:
+    packages: "pkgs_controller"
+    ssh_target: ["{{ env.z.lpar1.ip }}", "{{ env.z.lpar1.user }}", "{{ env.z.lpar1.pass }}", "~/.ssh/{{ env.ansible_key_name }}.pub"]
+  roles:
+    - set_inventory
+    - install_packages
+    - ssh_key_gen
+    - ssh_agent
+    - ssh_copy_id
+
+- name: Destroy ABI Cluster
+  hosts: kvm_host[0]
+  become: false
+  roles:
+    - delete_nodes
+    - destroy_bastion
+    - cleanup_kvm

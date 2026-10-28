@@ -1,0 +1,62 @@
+---
+- name: Print the list of packages to be installed and updated.
+  tags: install_packages
+  debug: msg={{ vars[packages] }}
+
+- name: Check if running inside an Execution Environment
+  tags: install_packages
+  ansible.builtin.stat:
+    path: /runner
+  register: runner_dir
+
+- name: Getting OS Version
+  shell: cat /etc/*release | grep 'VERSION_ID' | cut -d "=" -f 2 | tr -d '"'
+  register: os_version
+
+- name: Check RHEL subscription status
+  tags: install_packages
+  ansible.builtin.command: subscription-manager status
+  register: subscription_status
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_os_family | lower == 'redhat'
+    - not runner_dir.stat.exists
+
+- name: Installing libvirt-devel packages for RHEL machines.
+  tags: install_packages
+  become: true
+  ansible.builtin.package:
+    name: "libvirt-devel"
+    state: latest
+    update_cache: yes
+  when:
+    - ansible_os_family | lower == 'redhat'
+    - os_version.stdout | float < 9.0
+    - not runner_dir.stat.exists
+    - subscription_status.rc is defined
+    - subscription_status.rc == 0
+
+- name: Installing required packages for Linux machines.
+  tags: install_packages
+  become: true
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: latest
+    update_cache: yes
+  loop: "{{ vars[packages] }}"
+  when:
+    - ansible_os_family != 'Darwin'
+    - not runner_dir.stat.exists
+    - >-
+      ansible_os_family | lower != 'redhat' or
+      (subscription_status.rc is defined and subscription_status.rc == 0)
+
+#- name: Installing required packages for Mac machines.
+#  tags: install_packages
+#  become: false
+#  community.general.homebrew:
+#    name: "{{ item }}"
+#    state: latest
+#  loop: "{{ vars[packages] }}"
+#  when: ansible_os_family == 'Darwin'

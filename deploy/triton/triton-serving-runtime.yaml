@@ -1,0 +1,92 @@
+# ---------------------------------------------------------------------------
+# triton-serving-runtime.yaml
+#
+# Custom KServe ServingRuntime — IBM Z Accelerated NVIDIA Triton Inference Server
+# Image: icr.io/ibmz/ibmz-accelerated-for-nvidia-triton-inference-server:1.6.1
+#
+# Confirmed tag: 1.6.1  (the only tag in this repo as of 2026-09)
+# Architecture: s390x  ✓
+# Source: https://ibm.github.io/ibm-z-oss-hub/containers/index.html
+#
+# Login required (on <KVM_HOST> and on the OCP cluster):
+#   podman login icr.io --username iamapikey --password <IBM_CLOUD_API_KEY>
+#   (NOT cp.icr.io — that is the IBM Entitled Registry for RHOAI operators)
+#
+# Cluster: <CLUSTER_DOMAIN>
+# Namespace: fraud-detection
+#
+# Apply:
+#   oc apply -f deploy/triton/triton-serving-runtime.yaml
+# ---------------------------------------------------------------------------
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: triton-inference-server
+  namespace: fraud-detection
+  annotations:
+    opendatahub.io/apiProtocol: REST
+    # Display name shown in the RHOAI dashboard "Serving runtime" dropdown
+    openshift.io/display-name: "NVIDIA Triton Inference Server - IBM Z (Telum)"
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  # Single-model mode (KServe RawDeployment — one pod per InferenceService)
+  multiModel: false
+  protocolVersions:
+    - v2
+  supportedModelFormats:
+    # Triton accepts plain ONNX models placed in a Triton model repository
+    - name: onnx
+      version: "1"
+      autoSelect: true
+    # Also register onnx-mlir so the dashboard lets you pick either name
+    - name: onnx-mlir
+      version: "1"
+      autoSelect: false
+  containers:
+    - name: kserve-container
+      # IBM Z Accelerated Triton — s390x build from IBM Z OSS Hub
+      # Tag 1.6.1 confirmed 2026-09 — only available tag
+      # https://ibm.github.io/ibm-z-oss-hub/containers/index.html
+      #
+      # Backend installed: onnxmlir  (NOT onnxruntime)
+      # tritonserver binary: /opt/tritonserver/bin/tritonserver
+      #
+      # WHY command is set here:
+      #   The image entrypoint is ibm-z-accelerated-triton-splash.sh which does:
+      #     exec "$@"
+      #   KServe builds the Deployment by putting --model-repository=... as the
+      #   FIRST arg, so "$@" expands to "--model-repository=..." and exec's shell
+      #   builtin treats it as an unknown option.
+      #   Setting command to the tritonserver binary directly bypasses the splash
+      #   script and lets KServe append --model-repository and other flags cleanly.
+      image: icr.io/ibmz/ibmz-accelerated-for-nvidia-triton-inference-server:1.6.1
+      command:
+        - /opt/tritonserver/bin/tritonserver
+      args:
+        - --model-repository=/mnt/models
+        - --http-port=8080
+        - --grpc-port=8081
+        - --metrics-port=8082
+        - --log-verbose=1
+        - --backend-config=onnxmlir,enable-nnpa=true
+      ports:
+        - containerPort: 8080
+          name: http1
+          protocol: TCP
+        - containerPort: 8081
+          name: grpc
+          protocol: TCP
+      readinessProbe:
+        httpGet:
+          path: /v2/health/ready
+          port: 8080
+        initialDelaySeconds: 90
+        periodSeconds: 15
+        failureThreshold: 8
+      livenessProbe:
+        httpGet:
+          path: /v2/health/live
+          port: 8080
+        initialDelaySeconds: 120
+        periodSeconds: 30

@@ -1,0 +1,45 @@
+{% set base = env.cluster.networking.base_domain | regex_replace('\\.+$', '') %}
+{% set bbase = env.bastion.networking.base_domain | regex_replace('\\.+$', '') %}
+{% set meta = env.cluster.networking.metadata_name %}
+$TTL 86400
+@ IN SOA {{ env.bastion.networking.hostname }}.{{ bbase }}. admin.{{ bbase }}. (
+                                                2020021821 ;Serial
+                                                3600 ;Refresh
+                                                1800 ;Retry
+                                                604800 ;Expire
+                                                86400 ;Minimum TTL
+)
+
+;Name Server / Bastion Information
+{{ meta }}.{{ base }}. IN NS {{ env.bastion.networking.hostname }}.{{ bbase }}.
+
+;IP Address for Name Server
+{{ env.bastion.networking.hostname }} IN A {% if env.bastion.networking.internal_ip is defined and env.bastion.networking.internal_ip!=None %}{{ env.bastion.networking.internal_ip }}{% else %}{{ env.bastion.networking.ip }}{% endif %}
+
+;entry for bootstrap host.
+{% if env.cluster.nodes.bootstrap is defined %}
+{% if '.' in env.cluster.nodes.bootstrap.hostname %}
+{{ env.cluster.nodes.bootstrap.hostname | regex_replace('\\.+$', '') }}. IN A {{ env.cluster.nodes.bootstrap.ip }}
+{% else %}
+{{ env.cluster.nodes.bootstrap.hostname }}.{{ meta }}.{{ base }}. IN A {{ env.cluster.nodes.bootstrap.ip }}
+{% endif %}
+{% endif %}
+
+;entries for the control nodes
+
+;entries for the compute nodes
+
+;The api identifies the IP of your load balancer.
+api.{{ meta }}.{{ base }}.     IN    A {{ env.bastion.networking.ip }}
+api-int.{{ meta }}.{{ base }}. IN    A {{ env.bastion.networking.ip }}
+
+;The wildcard also identifies the load balancer.
+apps.{{ meta }}.{{ base }}.     IN    A {{ env.bastion.networking.ip }}
+*.apps.{{ meta }}.{{ base }}.   IN    A {{ env.bastion.networking.ip }}
+
+{% if disconnected.enabled %}
+;entry for mirror host.
+{{ meta }}.{{ meta }}.{{ base }}. IN A {{ disconnected.registry.ip }}
+{% endif %}
+
+;EOF

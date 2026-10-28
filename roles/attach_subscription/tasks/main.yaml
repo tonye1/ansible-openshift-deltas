@@ -1,0 +1,65 @@
+---
+
+- name: "Check if subscription-manager is available"
+  tags: attach_subscription
+  ansible.builtin.stat:
+    path: /usr/sbin/subscription-manager
+  register: subman_stat
+
+- name: "Register server with Red Hat using user and pwd"
+  tags: attach_subscription
+  ansible.builtin.shell: >
+    /usr/sbin/subscription-manager register
+    --username="{{ env.redhat.username }}"
+    --password="{{ env.redhat.password }}"
+    --auto-attach
+    || /usr/sbin/subscription-manager status
+  register: registration
+  changed_when: "'system has been registered' in registration.stdout"
+  failed_when: registration.rc != 0 and 'This system is already registered' not in registration.stdout
+  retries: 2
+  delay: 30
+  until: registration is not failed
+  when:
+    - subman_stat.stat.exists
+    - env.redhat.password is defined
+    - env.redhat.username is defined
+
+- name: "Disable all repos and enable only correct arch repos"
+  tags: attach_subscription
+  ansible.builtin.shell: |
+    /usr/sbin/subscription-manager repos --disable="*"
+    /usr/sbin/subscription-manager repos \
+      --enable="rhel-9-for-{{ ansible_architecture }}-baseos-rpms" \
+      --enable="rhel-9-for-{{ ansible_architecture }}-appstream-rpms"
+  when:
+    - subman_stat.stat.exists
+    - ansible_os_family == 'RedHat'
+    - env.redhat.password is defined
+    - env.redhat.username is defined
+
+- name: 'Activate RHEL account if software need to be installed to'
+  tags: setup, teuthology_node, setup_nodes
+  ansible.builtin.command:
+    argv:
+      - rhc
+      - connect
+      - --activation-key
+      - "{{ env.redhat.rhel_activation_key }}"
+      - --organization
+      - "{{ env.redhat.rhel_organization }}"
+  when:
+    - subman_stat.stat.exists
+    - env.redhat.activation_key is defined
+    - env.redhat.organization is defined
+
+- name: 'Install the rhc-worker-playbook'
+  tags: setup, teuthology_node, setup_nodes
+  ansible.builtin.command:
+    argv:
+      - dnf
+      - install
+      - -y
+      - rhc-worker-playbook
+  when:
+    - subman_stat.stat.exists

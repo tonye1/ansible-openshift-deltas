@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# config.pbtxt — Triton Inference Server model configuration
+#
+# Model: ccf_gru_static
+# Backend: onnxmlir
+#
+# The IBM Z Accelerated Triton image (1.6.1) ships these backends:
+#   onnxmlir   (/opt/tritonserver/backends/onnxmlir/libtriton_onnxmlir.so)  ← USE THIS
+#   pytorch    (/opt/tritonserver/backends/pytorch/)
+#   python     (/opt/tritonserver/backends/python/)
+#   ibmsnapml  (/opt/tritonserver/backends/ibmsnapml/)
+#   (NO plain onnxruntime backend)
+#
+# The onnxmlir backend compiles the .onnx model at load time using ONNX-MLIR
+# and dispatches GRU/MatMul ops to the Telum NNPA accelerator on IBM Z s390x.
+#
+# Original Keras model spec (ccf_220_keras_gru_static-OS.ipynb):
+#   input  name="input"  shape=(7, 16, 220)  dtype=float32
+#   output name="dense"  shape=(7, 16, 1)    dtype=float32
+#
+# Triton model repository layout in MinIO:
+#   s3://models/triton-ccf-gru-static/
+#     ccf_gru_static/
+#       config.pbtxt          ← this file
+#       1/
+#         model.onnx          ← renamed from ccf_gru_static_tf2onnx_OS_new.onnx
+# ---------------------------------------------------------------------------
+name: "ccf_gru_static"
+backend: "onnxmlir"
+
+# Fixed-shape static model.
+# max_batch_size: 0 — Triton's auto-batching is disabled.
+# The full [7, 16, 220] shape is the model's native input; batch is baked in.
+max_batch_size: 0
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [ 7, 16, 220 ]
+  }
+]
+
+output [
+  {
+    name: "dense"
+    data_type: TYPE_FP32
+    dims: [ 7, 16, 1 ]
+  }
+]
+
+instance_group [
+  {
+    # KIND_CPU — Telum NNPA acceleration is applied automatically by the
+    # onnxmlir backend when --maccel=NNPA ops are compiled into the model graph.
+    kind: KIND_CPU
+    count: 1
+  }
+]

@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# serving-runtime.yaml
+#
+# Custom KServe ServingRuntime for ONNX models on s390x (IBM Z).
+# Uses the onnx-server image built and pushed by build-and-push.sh.
+#
+# Apply to the fraud-detection namespace:
+#   oc apply -f serving-runtime.yaml
+# ---------------------------------------------------------------------------
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: onnx-server
+  namespace: fraud-detection
+  annotations:
+    opendatahub.io/apiProtocol: REST
+    openshift.io/display-name: "ONNX Server (s390x)"
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  multiModel: false
+  protocolVersions:
+    - v2
+  supportedModelFormats:
+    - name: onnx
+      version: "1"
+      autoSelect: true
+  containers:
+    - name: kserve-container
+      # Image built by build-and-push.sh and stored in the internal registry
+      image: image-registry.openshift-image-registry.svc:5000/fraud-detection/onnx-server:latest
+      env:
+        - name: MODEL_NAME
+          value: ccf_gru_static
+        - name: HTTP_PORT
+          value: "8080"
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+      readinessProbe:
+        httpGet:
+          path: /v2/health/ready
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 10
+      livenessProbe:
+        httpGet:
+          path: /v2/health/live
+          port: 8080
+        initialDelaySeconds: 40
+        periodSeconds: 20
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
